@@ -1,0 +1,1070 @@
+---
+title: "Dissertation Demographics"
+author: "Melissa Dreier"
+date: "2026-02-26"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r loaddata, include=FALSE} 
+
+.libPaths("C:/Users/Missy Dreier/Documents") # set library path
+
+# set working directory
+#setwd("C:/Users/Missy Dreier/Box/The Hamilton Lab/Ongoing Studies/PLUS2/Data/Final Datasets/EMA/Raw Data Merged")
+
+EMA <- read.csv("C:/Users/Missy Dreier/Box/The Hamilton Lab/Ongoing Studies/PLUS2/Data/Final Datasets/EMA/Raw Data Merged/PLUS-2 EMA Long Format.csv") # load main dataset
+
+
+# baseline data
+
+BL <- read.csv("C:/Users/Missy Dreier/Box/The Hamilton Lab/Ongoing Studies/PLUS2/Data/Final Datasets/Baseline and CSSRS/Raw Data/PLUS-2_Baseline_Survey.csv")
+
+# CSSRS
+
+cssrs <- read.csv("C:/Users/Missy Dreier/Box/The Hamilton Lab/Ongoing Studies/PLUS2/Data/Final Datasets/Baseline and CSSRS/Raw Data/PLUS-2_Baseline_CSSRS.csv")
+
+library(tidyverse)
+library(flextable)
+library(tidyr)
+library(psych)
+library(MplusAutomation)
+
+library(lme4)
+
+```
+
+
+
+```{r cleandata, include=F}
+
+
+#################### clean data ####################
+
+
+EMA$pid <- as.factor(EMA$pid) # make ID a factor
+
+
+## combine date and time to create "hours since study start" for tinterval in MPLUS
+
+EMA$submit_datetime_str <- paste(EMA$date, EMA$Survey.Submitted.Time) # bind date and time
+
+EMA$submit_datetime <- as.POSIXct(EMA$submit_datetime_str, format = "%Y-%m-%d %H:%M:%S") # ensure correct date format
+
+## create hours since study start variable
+
+EMA <- EMA %>% 
+  group_by(pid) %>%
+  mutate(study_start_datetime = min(submit_datetime, na.rm=T),
+         hours_since_study_start = floor(as.numeric(difftime(submit_datetime, study_start_datetime, units = "hours")))) %>%
+  ungroup()
+
+## sort data by pid and chronologically for each participant 
+
+EMA <- EMA %>%
+  group_by(pid) %>%
+  arrange(pid, hours_since_study_start)
+
+
+EMA <- EMA %>%
+  filter(pid!="2109") # remove participant with no EMA
+
+#################### additional cleaning for later ###################################################
+
+########## cleaning of emotion reg vars #################
+
+EMA$sm_emoreg <- as.numeric(EMA$sm_emoreg)
+
+EMA$ERStrategy <- ifelse(EMA$sm_emoreg==11, NA, EMA$sm_emoreg) # code "did not have a negative SM experience" as NA
+
+EMA$ERStrategy <- as.factor(EMA$ERStrategy)
+
+EMA$pid <- as.factor(EMA$pid) # change var name of ID to ID (and make it a factor again)
+
+
+################### ERSM/ERIRL vars #######################
+
+EMA$irl_neg_exp <- as.numeric(EMA$irl_neg_exp) #make numeric
+EMA$irl_pos_exp <- as.numeric(EMA$irl_pos_exp) #make numeric
+
+
+## score ERSM negative
+EMA <- EMA %>%
+  mutate(across(starts_with("ERSM_"), ~ as.numeric(as.character(.x)))) # make ERSM vars numeric
+
+
+items <- EMA[, c("ERSM_1", "ERSM_2", "ERSM_4", "ERSM_6")]
+
+EMA$ERSM_sum <- rowSums(items, na.rm = TRUE)
+EMA$ERSM_sum[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+ERSM <- EMA %>% select("ERSM_1", "ERSM_2", "ERSM_4", "ERSM_6", "ERSM_sum")
+#View(ERSM)
+
+### score positive ERSM vars
+
+items <- EMA[, c("ERSM_3", "ERSM_5", "ERSM_7")]
+
+EMA$ERSM_pos_sum <- rowSums(items, na.rm = TRUE)
+EMA$ERSM_pos_sum[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+
+
+## create global PA variable ###
+EMA$PA_HAPPY <- as.numeric(EMA$PA_HAPPY)
+
+EMA$PA_HOPEFUL <- as.numeric(EMA$PA_HOPEFUL)
+
+EMA$PA_SATISFIED <- as.numeric(EMA$PA_SATISFIED)
+
+items <- EMA[, c("PA_HAPPY", "PA_HOPEFUL", "PA_SATISFIED")]
+
+EMA$Global_PA <- rowMeans(items, na.rm = TRUE)
+EMA$Global_PA[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+
+####################### add week in study var ########################
+
+## dates in correct format
+EMA <- EMA %>%
+  mutate(
+    date = ymd(date),
+    aa_start_date = ymd(aa_start_date) # parses YYYY-MM-DD safely
+  )
+
+
+
+
+EMA <- EMA %>%
+  ungroup() %>%
+  mutate(
+    days_since_start = as.numeric(date - aa_start_date),
+    week_in_study = if_else(
+      days_since_start >= 0,
+      floor(days_since_start / 7) + 1,
+      NA_real_
+    )
+  )
+
+
+### create max days/weeks for checking later ##################
+EMA <- EMA %>%
+  group_by(pid) %>%
+  mutate(max_week = max(week_in_study),
+         max_days = max(day_in_study))
+
+EMA$pid <- as.factor(EMA$pid) # make ID a factor
+
+
+## combine date and time to create "hours since study start" for tinterval in MPLUS
+
+EMA$submit_datetime_str <- paste(EMA$date, EMA$Survey.Submitted.Time) # bind date and time
+
+EMA$submit_datetime <- as.POSIXct(EMA$submit_datetime_str, format = "%Y-%m-%d %H:%M:%S") # ensure correct date format
+
+## create hours since study start variable
+
+EMA <- EMA %>% 
+  group_by(pid) %>%
+  mutate(study_start_datetime = min(submit_datetime, na.rm=T),
+         hours_since_study_start = floor(as.numeric(difftime(submit_datetime, study_start_datetime, units = "hours")))) %>%
+  ungroup()
+
+## sort EMA by pid and chronologically for each participant 
+
+EMA <- EMA %>%
+  group_by(pid) %>%
+  arrange(pid, hours_since_study_start)
+
+
+EMA <- EMA %>%
+  filter(pid!="2109") # remove participant with no EMA
+
+#################### additional cleaning for later ###################################################
+
+########## cleaning of emotion reg vars #################
+
+EMA$sm_emoreg <- as.numeric(EMA$sm_emoreg)
+
+EMA$ERStrategy <- ifelse(EMA$sm_emoreg==11, NA, EMA$sm_emoreg) # code "did not have a negative SM experience" as NA
+
+EMA$ERStrategy <- as.factor(EMA$ERStrategy)
+
+EMA$pid <- as.factor(EMA$pid) # change var name of ID to ID (and make it a factor again)
+
+
+################### ERSM/ERIRL vars #######################
+
+EMA$irl_neg_exp <- as.numeric(EMA$irl_neg_exp) #make numeric
+EMA$irl_pos_exp <- as.numeric(EMA$irl_pos_exp) #make numeric
+
+
+## score ERSM negative
+EMA <- EMA %>%
+  mutate(across(starts_with("ERSM_"), ~ as.numeric(as.character(.x)))) # make ERSM vars numeric
+
+
+items <- EMA[, c("ERSM_1", "ERSM_2", "ERSM_4", "ERSM_6")]
+
+EMA$ERSM_sum <- rowSums(items, na.rm = TRUE)
+EMA$ERSM_sum[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+ERSM <- EMA %>% select("ERSM_1", "ERSM_2", "ERSM_4", "ERSM_6", "ERSM_sum")
+#View(ERSM)
+
+### score positive ERSM vars
+
+items <- EMA[, c("ERSM_3", "ERSM_5", "ERSM_7")]
+
+EMA$ERSM_pos_sum <- rowSums(items, na.rm = TRUE)
+EMA$ERSM_pos_sum[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+
+
+## create global PA variable ###
+EMA$PA_HAPPY <- as.numeric(EMA$PA_HAPPY)
+
+EMA$PA_HOPEFUL <- as.numeric(EMA$PA_HOPEFUL)
+
+EMA$PA_SATISFIED <- as.numeric(EMA$PA_SATISFIED)
+
+items <- EMA[, c("PA_HAPPY", "PA_HOPEFUL", "PA_SATISFIED")]
+
+EMA$Global_PA <- rowMeans(items, na.rm = TRUE)
+EMA$Global_PA[rowSums(!is.na(items)) == 0] <- NA # imputes NA if none were answered
+
+
+####################### add week in study var ########################
+
+## dates in correct format
+EMA <- EMA %>%
+  mutate(
+    date = ymd(date),
+    aa_start_date = ymd(aa_start_date) # parses YYYY-MM-DD safely
+  )
+
+
+
+
+EMA <- EMA %>%
+  ungroup() %>%
+  mutate(
+    days_since_start = as.numeric(date - aa_start_date),
+    week_in_study = if_else(
+      days_since_start >= 0,
+      floor(days_since_start / 7) + 1,
+      NA_real_
+    )
+  )
+
+
+### create max days/weeks for checking later ##################
+EMA <- EMA %>%
+  group_by(pid) %>%
+  mutate(max_week = max(week_in_study),
+         max_days = max(day_in_study))
+
+
+```
+
+
+```{r, include=F, message=F, warning=F}
+######################## merge on other datasets##############################
+
+
+
+ERSM=readModels("C:/Users/Missy Dreier/OneDrive - Rutgers University/Documents/Dissertation/Dissertation Analyses/MPLUS/ersm mood_2.25.26.out",what="all") #import the MPlus file
+
+ERSM1=ERSM[["parameters"]][["wilevel.standardized"]][["stdyx.standardized"]] # extract the within-level stdyx standardized parameters
+
+ERSM2=ERSM1[which(ERSM1$paramHeader=="BETA|DEP.ON"),] #To extract the beta parameter (ERSM & Mood)
+
+x=as.numeric(ERSM2$est) # make the estimate numeric
+
+
+# create groups based on effect
+ERSM2$effect_group <- ifelse(ERSM2$est < -.05, "Inverse", 
+                             ifelse(ERSM2$est > .05, "Expected", "Neutral"))
+
+
+ERSM2$effect_group <- factor(ERSM2$effect_group, levels = c("Inverse", "Neutral", "Expected"))
+
+
+### pull just necessary params ###
+ERSM_params <- ERSM2 %>% select("est", "cluster", "effect_group") %>%
+  rename("ERSM_Mood_effect" = "est", "pid" = "cluster")
+
+ERSM_params$pid <- as.factor(ERSM_params$pid) # make ID factor
+
+EMA$pid <- as.numeric(as.character(EMA$pid)) # now make ID numeric
+
+data_ER <- subset(EMA, pid >= 2223) # for ER data, subset to only those with data
+
+EMA$pid <- as.factor(EMA$pid) # now make ID a factor
+
+effects <- right_join(EMA, ERSM_params, by = "pid") # join full dataset
+
+data_ER$pid <- as.factor(data_ER$pid)
+
+effects_ER <- merge(data_ER, ERSM_params, by = "pid") # now just just the ER dataset - include only people in both datasets
+
+```
+
+
+
+```{r, include=F, warning=F, message=F}
+
+######################## merge on BL & CSSRS #######################
+
+############ compare baseline characteristics ##################
+
+###### merge BL & CSSRS #########
+cssrs <- cssrs %>% rename("pid" = "ID")
+BL <- BL %>% rename("pid" = "ID")
+
+cssrs$pid <- as.factor(cssrs$pid)
+BL$pid <- as.factor(BL$pid)
+
+effects_cssrs <- left_join(effects, cssrs, by = "pid")
+data <- left_join(effects_cssrs, BL, by = "pid")
+
+
+
+## create scores for measures
+data_score <- data %>%
+  ungroup() %>%
+  mutate(
+    MASC_total = rowSums(
+      select(., "MASC_1":"MASC_39"),
+      na.rm = TRUE),
+    MFQ_total = rowSums(
+      select(., "MFQ_1":"MFQ_33"),
+      na.rm = TRUE
+    )
+    
+  )
+
+########################## create wide dataset - 1 row per person ################
+
+data_wide <- data_score %>%
+  group_by(pid) %>%
+  slice(1) %>%
+  ungroup()
+
+### cssrs scoring BXS #
+
+### create yes/no variable for any SI ##
+
+data_wide <- data_wide %>%
+  mutate(
+    cssrs_SI_any = case_when(
+      rowSums(select(., matches("^cssrs_SI.*\\.")) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., matches("^cssrs_SI.*\\.")))) > 0 ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+#make factor & change levels to be readable
+
+data_wide$cssrs_SI_any <- as.factor(data_wide$cssrs_SI_any)
+levels(data_wide$cssrs_SI_any) <-  c("No", "Yes")
+
+
+
+### create yes/no variable for attempts ###
+
+data_wide$attempt <- ifelse(data_wide$SB1_AA==1 | data_wide$SB1_IA1==1 | 
+                                    data_wide$SB_ABA1==1, "Yes", "No")
+
+##### change NSSI factor levels #######
+data_wide$NSSI_1A <- as.factor(data_wide$NSSI_1A)
+levels(data_wide$NSSI_1A) <-  c("No", "Yes")
+
+
+```
+
+```{r, include=F, message=F, warning=F}
+
+############################# overall sample demos/characteristics ######################################
+
+### make multiracial variable
+
+data_wide$multiracial <- ifelse(rowSums(data_wide[, c("Race_1", "Race_2", "Race_3", "Race_7", "Race_4", "Race_5", "Race_6")], na.rm = T) >= 2, 1, 0)
+
+
+
+n_white <- n_distinct(which(data_wide$Race_5==1 & data_wide$multiracial==0))
+
+n_white # get number white
+
+n_white / nrow(data_wide) # get percent white
+
+n_female <- n_distinct(which(data_wide$Sex==0))
+
+n_female # number female
+
+n_female / nrow(data_wide) # percent female
+
+
+mean(data_wide$Age, na.rm = T)
+sd(data_wide$Age, na.rm = T)
+
+
+################ clean sexual orientation or gender ###################################
+
+
+data_wide$Sexorient_clean <- ifelse(data_wide$SexOrientation==0, 0, 1) # clean into heterosexual vs. not, 0 = heterosexual
+
+table(data_wide$Sexorient_clean)
+
+## create new transgender variable
+
+data_wide$everything_but_girl <- ifelse(rowSums(data_wide[, c("Gender_2", "Gender_3", "Gender_4", "Gender_5", "Gender_6", "Gender_7", "Gender_8", 
+                                                    "Gender_9", "Gender_10", "Gender_11")], na.rm = T) >= 1, 1, 0)
+
+data_wide$everything_but_boy <- ifelse(rowSums(data_wide[, c("Gender_1", "Gender_3", "Gender_4", "Gender_5", "Gender_6", "Gender_7", "Gender_8", 
+                                                    "Gender_9", "Gender_10", "Gender_11")], na.rm = T) >= 1, 1, 0)
+
+data_wide$Trans_clean <- ifelse(data_wide$Sex==0 & data_wide$everything_but_girl==0 | (data_wide$Sex==1  & data_wide$everything_but_boy==0), 0, 1)
+
+table(data_wide$Transgender)
+
+
+data_wide <- data_wide %>%
+  mutate(gender_clean = case_when(
+    !is.na(Gender_1) & everything_but_girl==0 ~ "Girl",
+    !is.na(Gender_2) & everything_but_boy==0 ~ "Boy",
+    .default = "Nonbinary"
+    
+    
+  ))
+
+table(data_wide$gender_clean)
+
+
+###### in tx ##############
+
+
+data_wide$tx <- ifelse(is.na(data_wide$CSRI_1_1) & is.na(data_wide$CSRI_1_2) & is.na(data_wide$CSRI_1_3) & is.na(data_wide$CSRI_1_4), 0, 1)
+
+table(data_wide$tx)
+
+
+table(data_wide$tx, data_wide$effect_group)
+
+group <- data_wide %>% filter(effect_group=="Inverse") # check who is in inverse group
+
+
+########################## cronbach alphas #########################
+
+MFQ <- data_wide %>% select("MFQ_1":"MFQ_33") # pull MFQ vars
+
+psych::alpha(MFQ) # .93
+
+
+MASC <- data_wide %>% select("MASC_1":"MASC_39") # pull MFQ vars
+
+psych::alpha(MASC) # .92
+
+
+
+############ averages/numbers ##################
+
+mean(data_wide$MFQ_total, na.rm = T) # 20.32
+sd(data_wide$MFQ_total, na.rm = T) # 13.45
+min(data_wide$MFQ_total, na.rm = T) # 0
+max(data_wide$MFQ_total, na.rm = T) # 66
+
+
+
+mean(data_wide$MASC_total, na.rm = T) # 48.95
+sd(data_wide$MASC_total, na.rm = T) # 21.38
+min(data_wide$MASC_total, na.rm = T) # 0
+max(data_wide$MASC_total, na.rm = T) # 104
+
+
+table(data_wide$cssrs_SI_any) # n = 79
+
+table(data_wide$attempt) # n = 31
+
+table(data_wide$NSSI_1A) # n = 61
+
+# clean SI var - EMA
+
+data$SI_clean = ifelse(data$SI_Passive==1 | data$SI_Active==1 | data$SI_Active==2 | data$SI_Method==1 | data$SI_Method==2, 1, 0)
+
+table(data$SI_clean) # 324 prompts
+
+SI_summary <- data %>%
+  group_by(pid) %>%
+  summarise(SI_sum = sum(SI_clean, na.rm = T)) %>%
+  mutate(SI_yn = ifelse(SI_sum > 0, "Yes", "No"))
+
+table(SI_summary$SI_yn)
+
+
+#################################   SES ###########################################
+
+
+mean(data_wide$SES_Society, na.rm=T) # 5.33
+sd(data_wide$SES_Society, na.rm=T) # 1.69
+
+min(data_wide$SES_Society, na.rm=T) # 1
+max(data_wide$SES_Society, na.rm=T) # 10
+
+############################## clean race variable ##############################
+
+### create cleaned race var - race vars are out of order, which is why I have it look like 1-6 (7 is in the middle)
+
+data_wide <- data_wide %>% 
+  mutate(race_clean = case_when(
+    rowSums(select(., "Race_1":"Race_6"), na.rm=T) > 1 ~ "Multiracial",
+        !is.na(Race_1) & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "American Indian/Alaska Native",
+        !is.na(Race_2) & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "Asian",
+        !is.na(Race_3) & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "Black",
+        !is.na(Race_4) & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "HPI",
+        !is.na(Race_5)  & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "White",
+        !is.na(Race_6)  & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "Hispanic",
+        !is.na(Race_7)  & rowSums(select(., "Race_1":"Race_6"), na.rm=T) == 1 ~ "Other",
+        .default = "Not reported"
+        
+    
+  ))
+
+table(data_wide$race_clean)
+
+data_race <- data_wide %>% select("Race_1":"Race_6")
+
+```
+*Table 2* Sample Demographics
+
+```{r table2, include=F, message=F, warning=F}
+
+############ create table with just those included in the different groups ################
+df <- data_wide %>% filter(pid != "2139", pid != "2252",  pid != "2172", pid != "2227") # remove case with < 50 observations
+
+expected <- df %>% filter(effect_group=="Expected")
+
+neutral <- df %>% filter(effect_group=="Neutral")
+
+inverse <- df %>% filter(effect_group=="Inverse")
+
+excluded <- data_wide %>% filter(pid == "2139" | pid == "2252" | pid == "2172" | pid == "2227")
+
+############################ table ########################################################
+
+
+# === Helper functions ===
+n_pct <- function(data, condition) {
+  n <- sum(condition, na.rm = TRUE)
+  pct <- round(n / nrow(data) * 100, 2)
+  paste0(n, " (", pct, "%)")
+}
+
+mean_sd <- function(data, var) {
+  m <- round(mean(data[[var]], na.rm = TRUE), 2)
+  s <- round(sd(data[[var]], na.rm = TRUE), 2)
+  paste0(m, " (", s, ")")
+}
+
+
+# === Labels (from Age to Immigrant Status, plus your new variables) ===
+labels <- c(
+  "Age, M (SD)", "Race and Ethnicity", "American Indian/Alaska Native", "Asian",
+  "Black/African American", "Hispanic/Latino/Latina",
+  "White", "Multiracial",
+  "Not Listed", "Not reported", "Gender", "Girl", "Boy", 
+  "Nonbinary, Third Gender, or Genderfluid", "Sex", "Female", "Male", "Not reported",
+  "Transgender Status", "Transgender", "Cisgender", "Not reported",
+  "Sexual Orientation", "Heterosexual", "LGBQ+", "Not reported", "SES, M (SD)", "MASC, M (SD)", "MFQ, M (SD)", "History of SI (Yes/No)", "History of Suicide Attempt", "History of NSSI", "Mental Health Treatment History", "Outpatient", "Inpatient", "In-Person Emergency Services", "Online Emergency Services (e.g., crisis hotines)"
+)
+
+# === data for expected ===
+
+values_expected <- c(
+  mean_sd(expected, "Age"), # Age
+  
+  "", # Race/ethnicity
+  
+  n_pct(expected, expected$race_clean=="American Indian/Alaska Native"),
+  n_pct(expected, expected$race_clean=="Asian"),
+  n_pct(expected, expected$race_clean=="Black"),
+  n_pct(expected, expected$race_clean=="Hispanic"),
+  n_pct(expected, expected$race_clean=="White"),
+  n_pct(expected, expected$race_clean=="Multiracial"),
+  n_pct(expected, expected$race_clean=="Other"),
+  n_pct(expected, expected$race_clean=="Not reported"), 
+  
+  "", # Gender
+  
+  n_pct(expected, expected$gender_clean=="Girl"),
+  n_pct(expected, expected$gender_clean=="Boy"),
+  n_pct(expected, expected$gender_clean=="Nonbinary"),
+  
+  "", # sex
+  
+  n_pct(expected, expected$Sex=="0"),
+  n_pct(expected, expected$Sex=="1"),
+  n_pct(expected, is.na(expected$Sex)),
+  
+  "", # trans status
+  
+  n_pct(expected, expected$Trans_clean==1),
+  n_pct(expected, expected$Trans_clean==0),
+  n_pct(expected, is.na(expected$Trans_clean)),
+  
+  "", # sexual orientation
+  
+  n_pct(expected, expected$Sexorient_clean==0),
+  n_pct(expected, expected$Sexorient_clean==1),
+  n_pct(expected, is.na(expected$Sexorient_clean)),
+  
+
+  mean_sd(expected, "SES_Society"), # ses,
+  mean_sd(expected, "MASC_total"), # MASC
+  mean_sd(expected, "MFQ_total"), # MFQ
+  n_pct(expected, expected$cssrs_SI_any=="Yes"), # SI
+  n_pct(expected, expected$attempt=="Yes"), # SA
+  n_pct(expected, expected$NSSI_1A=="Yes"), # NSSI,
+  
+  "", # tx history
+  
+  n_pct(expected, !is.na(expected$CSRI_1_1)), # outpatient tx
+  n_pct(expected, !is.na(expected$CSRI_1_2)), # outpatient tx
+  n_pct(expected, !is.na(expected$CSRI_1_3)), # outpatient tx
+  n_pct(expected, !is.na(expected$CSRI_1_4)) # outpatient tx
+  
+  
+)
+
+
+
+
+
+# === data for neutral ===
+
+values_neutral <- c(
+  mean_sd(neutral, "Age"), # Age
+  
+  "", # Race/ethnicity
+  
+  n_pct(neutral, neutral$race_clean=="American Indian/Alaska Native"),
+  n_pct(neutral, neutral$race_clean=="Asian"),
+  n_pct(neutral, neutral$race_clean=="Black"),
+  n_pct(neutral, neutral$race_clean=="Hispanic"),
+  n_pct(neutral, neutral$race_clean=="White"),
+  n_pct(neutral, neutral$race_clean=="Multiracial"),
+  n_pct(neutral, neutral$race_clean=="Other"),
+  n_pct(neutral, neutral$race_clean=="Not reported"), 
+  
+  "", # Gender
+  
+  n_pct(neutral, neutral$gender_clean=="Girl"),
+  n_pct(neutral, neutral$gender_clean=="Boy"),
+  n_pct(neutral, neutral$gender_clean=="Nonbinary"),
+  
+  "", # sex
+  
+  n_pct(neutral, neutral$Sex=="0"),
+  n_pct(neutral, neutral$Sex=="1"),
+  n_pct(neutral, is.na(neutral$Sex)),
+  
+  "", # trans status
+  
+  n_pct(neutral, neutral$Trans_clean==1),
+  n_pct(neutral, neutral$Trans_clean==0),
+  n_pct(neutral, is.na(neutral$Trans_clean)),
+  
+  "", # sexual orientation
+  
+  n_pct(neutral, neutral$Sexorient_clean==0),
+  n_pct(neutral, neutral$Sexorient_clean==1),
+  n_pct(neutral, is.na(neutral$Sexorient_clean)),
+  
+
+  mean_sd(neutral, "SES_Society"), # ses,
+  mean_sd(neutral, "MASC_total"), # MASC
+  mean_sd(neutral, "MFQ_total"), # MFQ
+  n_pct(neutral, neutral$cssrs_SI_any=="Yes"), # SI
+  n_pct(neutral, neutral$attempt=="Yes"), # SA
+  n_pct(neutral, neutral$NSSI_1A=="Yes"), # NSSI,
+  
+  "", # tx history
+  
+  n_pct(neutral, !is.na(neutral$CSRI_1_1)), # outpatient tx
+  n_pct(neutral, !is.na(neutral$CSRI_1_2)), # outpatient tx
+  n_pct(neutral, !is.na(neutral$CSRI_1_3)), # outpatient tx
+  n_pct(neutral, !is.na(neutral$CSRI_1_4)) # outpatient tx
+  
+  
+)
+
+
+### === data for inverse ===
+
+values_inverse <- c(
+  mean_sd(inverse, "Age"), # Age
+  
+  "", # Race/ethnicity
+  
+  n_pct(inverse, inverse$race_clean=="American Indian/Alaska Native"),
+  n_pct(inverse, inverse$race_clean=="Asian"),
+  n_pct(inverse, inverse$race_clean=="Black"),
+  n_pct(inverse, inverse$race_clean=="Hispanic"),
+  n_pct(inverse, inverse$race_clean=="White"),
+  n_pct(inverse, inverse$race_clean=="Multiracial"),
+  n_pct(inverse, inverse$race_clean=="Other"),
+  n_pct(inverse, inverse$race_clean=="Not reported"), 
+  
+  "", # Gender
+  
+  n_pct(inverse, inverse$gender_clean=="Girl"),
+  n_pct(inverse, inverse$gender_clean=="Boy"),
+  n_pct(inverse, inverse$gender_clean=="Nonbinary"),
+  
+  "", # sex
+  
+  n_pct(inverse, inverse$Sex=="0"),
+  n_pct(inverse, inverse$Sex=="1"),
+  n_pct(inverse, is.na(inverse$Sex)),
+  
+  "", # trans status
+  
+  n_pct(inverse, inverse$Trans_clean==1),
+  n_pct(inverse, inverse$Trans_clean==0),
+  n_pct(inverse, is.na(inverse$Trans_clean)),
+  
+  "", # sexual orientation
+  
+  n_pct(inverse, inverse$Sexorient_clean==0),
+  n_pct(inverse, inverse$Sexorient_clean==1),
+  n_pct(inverse, is.na(inverse$Sexorient_clean)),
+  
+
+  mean_sd(inverse, "SES_Society"), # ses,
+  mean_sd(inverse, "MASC_total"), # MASC
+  mean_sd(inverse, "MFQ_total"), # MFQ
+  n_pct(inverse, inverse$cssrs_SI_any=="Yes"), # SI
+  n_pct(inverse, inverse$attempt=="Yes"), # SA
+  n_pct(inverse, inverse$NSSI_1A=="Yes"), # NSSI,
+  
+  "", # tx history
+  
+  n_pct(inverse, !is.na(inverse$CSRI_1_1)), # outpatient tx
+  n_pct(inverse, !is.na(inverse$CSRI_1_2)), # inpatient tx
+  n_pct(inverse, !is.na(inverse$CSRI_1_3)), # emergency tx
+  n_pct(inverse, !is.na(inverse$CSRI_1_4)) # online crisis tx
+  
+  
+)
+
+
+
+
+### === data for inverse ===
+
+values_excluded <- c(
+  mean_sd(excluded, "Age"), # Age
+
+  "", # Race/ethnicity
+  
+  n_pct(excluded, excluded$race_clean=="American Indian/Alaska Native"),
+  n_pct(excluded, excluded$race_clean=="Asian"),
+  n_pct(excluded, excluded$race_clean=="Black"),
+  n_pct(excluded, excluded$race_clean=="Hispanic"),
+  n_pct(excluded, excluded$race_clean=="White"),
+  n_pct(excluded, excluded$race_clean=="Multiracial"),
+  n_pct(excluded, excluded$race_clean=="Other"),
+  n_pct(excluded, excluded$race_clean=="Not reported"), 
+  
+  "", # Gender
+  
+  n_pct(excluded, excluded$gender_clean=="Girl"),
+  n_pct(excluded, excluded$gender_clean=="Boy"),
+  n_pct(excluded, excluded$gender_clean=="Nonbinary"),
+  
+  "", # sex
+  
+  n_pct(excluded, excluded$Sex=="0"),
+  n_pct(excluded, excluded$Sex=="1"),
+  n_pct(excluded, is.na(excluded$Sex)),
+  
+  "", # trans status
+  
+  n_pct(excluded, excluded$Trans_clean==1),
+  n_pct(excluded, excluded$Trans_clean==0),
+  n_pct(excluded, is.na(excluded$Trans_clean)),
+  
+  "", # sexual orientation
+  
+  n_pct(excluded, excluded$Sexorient_clean==0),
+  n_pct(excluded, excluded$Sexorient_clean==1),
+  n_pct(excluded, is.na(excluded$Sexorient_clean)),
+  
+
+  mean_sd(excluded, "SES_Society"), # ses,
+  mean_sd(excluded, "MASC_total"), # MASC
+  mean_sd(excluded, "MFQ_total"), # MFQ
+  n_pct(excluded, excluded$cssrs_SI_any=="Yes"), # SI
+  n_pct(excluded, excluded$attempt=="Yes"), # SA
+  n_pct(excluded, excluded$NSSI_1A=="Yes"), # NSSI,
+  
+  "", # tx history
+  
+  n_pct(excluded, !is.na(excluded$CSRI_1_1)), # outpatient tx
+  n_pct(excluded, !is.na(excluded$CSRI_1_2)), # inpatient tx
+  n_pct(excluded, !is.na(excluded$CSRI_1_3)), # emergency tx
+  n_pct(excluded, !is.na(excluded$CSRI_1_4)) # online crisis tx
+  
+  
+)
+# === Final table ===
+demog <- data.frame(
+  Measure = labels,
+  `N, % (Expected)` = values_expected,
+  `N, % (Neutral)` = values_neutral,
+  `N, % (Inverse)` = values_inverse,
+  `N, % (No Group)` = values_excluded
+
+)
+
+
+
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+
+flextable(demog) # make above dataframe into a nice-looking table
+
+
+```
+
+*Table 3* EMA Measures
+```{r, include=F, warning=F, message=F}
+
+
+#### helper functions ####
+
+### to create N ###
+Number <- function(data, id_var, target_var) {
+    data_new <- data %>%
+    group_by({{ id_var }}) %>%
+    summarise(has_data = any(!is.na({{ target_var }})), .groups = "drop") %>%
+    summarise(n_people = sum(has_data))
+  
+    paste0(data_new$n_people)
+}
+
+number <- function(data, var) {
+  paste0(number = n_distinct(data) - n_distinct(which(is.na(data[[var]]))))
+}
+
+MeanEMA <- function(data, id_var, target_var) {
+  data_new <-
+  data %>%
+    dplyr::group_by({{ id_var }}) %>%
+    dplyr::summarise(
+      person_mean = mean({{ target_var }}, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(!is.na(person_mean)) %>%   # remove people with all NA
+    dplyr::summarise(grand_mean = round(mean(person_mean), 2)) 
+  
+  paste0(data_new$grand_mean)
+}
+
+SDEMA <- function(data, id_var, target_var) {
+  data_new <-
+  data %>%
+    dplyr::group_by({{ id_var }}) %>%
+    dplyr::summarise(
+      person_mean = mean({{ target_var }}, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(!is.na(person_mean)) %>%   # remove people with all NA
+    dplyr::summarise(grand_sd = round(sd(person_mean), 2)) 
+  
+  paste0(data_new$grand_sd)
+}
+
+Range_new <- function(data, var) {
+  min <- min(data[[var]], na.rm = T)
+  max <- max(data[[var]], na.rm = T)
+  paste0(min, " - ", max)
+}
+
+icc_lmer <- function(data, var, id = "pid") {
+  f <- as.formula(paste0(var, " ~ 1 + (1|", id, ")"))
+  m <- lmer(f, data = data, REML = TRUE, na.action = na.omit)
+  vc <- as.data.frame(VarCorr(m))
+  between <- vc$vcov[vc$grp == id]      # random intercept variance
+  within  <- vc$vcov[vc$grp == "Residual"]
+  icc <- between / (between + within)
+  paste0(round(icc, 2))
+}
+
+
+measures = data.frame(
+
+
+labels <- c("Depresed Mood", "Positive Affect", "Suicidal Thoughts (Yes/No)", "Negative ERSM", "Positive ERSM", "Emotional Reactions to Negative In-Person Experiences", "Emotional Reactions to Positive In-Person Experiences", "Emotion Regulation Strategy"),
+
+
+N <- c(Number(data, pid, Depression), Number(data, pid, Global_PA), Number(data, pid, SI_clean), Number(data, pid, ERSM_sum), Number(data, pid, ERSM_pos_sum), Number(data, pid, irl_neg_exp), Number(data, pid, irl_pos_exp), Number(data, pid, sm_emoreg)),
+
+n <- c(number(data, "Depression"), number(data, "Global_PA"), number(data, "SI_clean"), number(data, "ERSM_sum"), number(data, "ERSM_pos_sum"), number(data, "irl_neg_exp"), number(data, "irl_pos_exp"), number(data, "sm_emoreg")),
+
+
+M <- c(MeanEMA(data, pid, Depression), MeanEMA(data, pid, Global_PA), paste0("# Yes: ", n_distinct(which(data$SI_clean==1))), MeanEMA(data, pid, ERSM_sum), MeanEMA(data, pid, ERSM_pos_sum), MeanEMA(data, pid, irl_neg_exp), MeanEMA(data, pid, irl_pos_exp), "--"),
+
+SD <- c(SDEMA(data, pid, Depression), SDEMA(data, pid, Global_PA), paste0("# No: ", n_distinct(which(data$SI_clean==0))), SDEMA(data, pid, ERSM_sum), SDEMA(data, pid, ERSM_pos_sum), SDEMA(data, pid, irl_neg_exp), SDEMA(data, pid, irl_pos_exp), "--"),
+
+Range <- c(Range_new(data, "Depression"), Range_new(data, "Global_PA"), "--", Range_new(data, "ERSM_sum"), Range_new(data, "ERSM_pos_sum"), Range_new(data, "irl_neg_exp"), Range_new(data, "irl_pos_exp"), "--"),
+
+PRange <- c("0 - 10", "0 - 4", "--", "0 - 24", "0 - 18", "0 - 6", "0 - 6", "--"),
+
+ICC <- c(icc_lmer(data, "Depression"), icc_lmer(data, "Global_PA"), "--", icc_lmer(data, "ERSM_sum"), icc_lmer(data, "ERSM_pos_sum"), icc_lmer(data, "irl_neg_exp"), icc_lmer(data, "irl_pos_exp"), "--")
+
+)
+
+colnames(measures) <- c(" ", "N", "n", "M", "SD", "Range", "Possible Range", "ICC") # update column names for table
+
+
+
+
+``` 
+
+```{r, echo=F, message=F, warning=F}
+
+
+flextable(measures)
+
+
+```
+
+
+*Table 4* ERSM and ER Endorsements
+
+```{r, include = F, message=F, warning=F}
+
+# === Helper functions ===
+n_pct <- function(data, condition) {
+  n <- sum(condition, na.rm = TRUE)
+  pct <- round(n / length(which(data$Response.Type=="Submission")) * 100, 2)
+  paste0(n, " (", pct, "%)")
+}
+
+# === Helper functions ===
+n_pct_er <- function(data, var, condition) {
+  data_new <- data %>%
+    filter(condition)
+  n <- sum(round(data_new[[var]], 2), na.rm=T)
+  pct <- round(n / 6744 * 100, 2)
+  paste0(n, " (", pct, "%)")
+}
+
+
+#### edit ER variable ###
+
+data$ERStrategy <- factor(data$ERStrategy, levels = c(1,2,3,4,5,6,7,8,9,10),
+      labels = c(
+        "Acceptance",
+        "Problem Solving",
+        "Social Support",
+        "Reappraisal",
+        "Emotional Expression",
+        "Rumination",
+        "Cognitive Avoidance",
+        "Behavioral Avoidance",
+        "Something Else",
+        "Nothing"
+      )
+    )
+
+
+### 1) Count unique strategies per person (raw)
+unique_counts <- data %>%
+  group_by(pid) %>%
+  summarise(
+    n_unique_ER_strategies = n_distinct(ERStrategy[!is.na(ERStrategy)]),
+    .groups = "drop"
+  )
+
+### 2) Create person x strategy counts (this is your missing `er_counts`)
+er_counts <- data %>%
+  filter(!is.na(ERStrategy), !is.na(randomized_yn)) %>%
+  group_by(pid, randomized_yn, ERStrategy) %>%
+  summarise(n = dplyr::n(), .groups = "drop")
+
+### 3) Get overall strategy proportions within randomized_yn groups
+# (overall across people, using counts)
+p_yes <- er_counts %>%
+  filter(randomized_yn == 1) %>%
+  group_by(ERStrategy) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(p_yes = n / sum(n)) %>%
+  select(ERStrategy, p_yes)
+
+p_no <- er_counts %>%
+  filter(randomized_yn == 0) %>%
+  group_by(ERStrategy) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(p_no = n / sum(n)) %>%
+  select(ERStrategy, p_no)
+
+### 4) Weight map: how common strategy is in randomized vs nonrandomized
+# Use a small epsilon to avoid divide-by-zero if a strategy is absent in one group.
+eps <- 1e-8
+
+w_map <- full_join(p_no, p_yes, by = "ERStrategy") %>%
+  mutate(
+    p_no  = tidyr::replace_na(p_no,  0),
+    p_yes = tidyr::replace_na(p_yes, 0),
+    w = (p_yes + eps) / (p_no + eps)
+  ) %>%
+  select(ERStrategy, w)
+
+### 5) Apply weights to NONrandomized counts only
+er_counts_adj <- er_counts %>%
+  left_join(w_map, by = "ERStrategy") %>%
+  mutate(
+    w = tidyr::replace_na(w, 1),
+    n_adj = if_else(randomized_yn == 0, n * w, as.numeric(n))
+  )
+
+
+################### table ######################
+
+labels <- c("Negative ERSM", "Negative Comparison", "FOMO", "Nervous to Post", "Sad or Hurt from Interaction", "Emotion Regulation", "Acceptance", "Behavioral Avoidance", "Cognitive Avoidance", "Emotional Expression", "Nothing", "Problem Solving", "Reappraisal", "Rumination", "Social Support", "Something Else")
+
+
+N <- c("", n_pct(data, data$ERSM_1.x > 0), n_pct(data, data$ERSM_2.x > 0), n_pct(data, data$ERSM_4.x > 0), n_pct(data, data$ERSM_6.x > 0), "",
+       
+       n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Acceptance"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Behavioral Avoidance"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Cognitive Avoidance"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Emotional Expression"), 
+       n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Nothing"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Problem Solving"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Reappraisal"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Rumination"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Social Support"), n_pct_er(er_counts_adj, "n_adj", er_counts_adj$ERStrategy=="Something Else"))
+
+
+
+# === Final table ===
+counts <- data.frame(
+  "Measure" = labels,
+  "N, %" = N
+)
+
+
+```
+
+```{r, echo=F, message=F, warning=F}
+
+flextable(counts)
+
+
+
+```
+
+
